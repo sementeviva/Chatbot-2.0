@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Conversas</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <style>
+        #chat-history::-webkit-scrollbar { width: 8px; }
+        #chat-history::-webkit-scrollbar-track { background: #f1f1f1; }
+        #chat-history::-webkit-scrollbar-thumb { background: #888; border-radius: 4px; }
+        .contato-item.active { background-color: #e0f2fe; }
+        .unread-badge { background-color: #ef4444; color: white; font-size: 0.75rem; font-weight: bold; border-radius: 9999px; padding: 0.1rem 0.45rem; }
+        .attention-alert { color: #ef4444; animation: pulse 1.5s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    </style>
+</head>
+<body class="bg-gray-100 h-screen flex flex-col p-4">
+
+    <!-- NOVO: Elemento de áudio para a notificação sonora -->
+    <audio id="notification-sound" src="https://cdn.pixabay.com/audio/2022/11/07/audio_a717c385db.mp3" preload="auto"></audio>
+
+    <div class="flex items-center gap-4 mb-4">
+        <a href="{{ url_for('home') }}" class="text-blue-600 hover:text-blue-800" title="Voltar"><i class="fas fa-arrow-left fa-lg"></i></a>
+        <h1 class="text-3xl font-bold text-gray-800">Visualizador de Conversas</h1>
+    </div>
+
+    <div class="flex flex-1 bg-white rounded-lg shadow-md overflow-hidden">
+        <div class="w-1/3 border-r border-gray-200 flex flex-col">
+            <div class="p-4 border-b"><h2 class="text-xl font-semibold">Contatos</h2></div>
+            <div id="contact-list" class="flex-1 overflow-y-auto">
+                {% for contato in contatos %}
+                <div id="contact-{{ contato.contato }}" onclick="selecionarConversa('{{ contato.contato }}', this)" class="contato-item p-4 cursor-pointer hover:bg-gray-50 border-b">
+                    <div class="flex justify-between items-center">
+                        <p class="font-bold text-gray-800">{{ contato.contato }}</p>
+                        <div class="flex items-center gap-2">
+                            {% if contato.status_atendimento == 'requer_atencao' %}
+                            <span id="alert-icon-{{ contato.contato }}" title="Requer Atenção" class="attention-alert"><i class="fas fa-bell"></i></span>
+                            {% endif %}
+                            {% if contato.nao_lidas > 0 %}
+                            <span id="badge-{{ contato.contato }}" class="unread-badge">{{ contato.nao_lidas }}</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="flex justify-between text-sm text-gray-500 mt-1">
+                        <span>{{ contato.total_mensagens }} mensagens</span>
+                        <span>{{ contato.ultima_mensagem.strftime('%d/%m %H:%M') }}</span>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        
+        <div class="w-2/3 flex flex-col">
+            <div id="chat-header" class="p-4 border-b flex justify-between items-center"></div>
+            <div id="chat-history" class="flex-1 p-6 overflow-y-auto bg-gray-50">
+                <div class="flex flex-col items-center justify-center h-full text-gray-400">
+                    <i class="fas fa-comments fa-4x"></i>
+                    <p class="mt-4">Selecione um contato para ver a conversa</p>
+                </div>
+            </div>
+            <div id="reply-container" class="p-4 bg-gray-100 border-t" style="display: none;">
+                <form id="reply-form" class="flex items-center gap-2">
+                    <input type="text" id="reply-message" placeholder="Digite sua mensagem..." autocomplete="off" class="w-full py-2 px-4 rounded-full border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    <button type="submit" class="bg-blue-500 hover:bg-blue-600 text-white rounded-full p-3 flex-shrink-0">
+                        <i class="fas fa-paper-plane"></i>
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+<script>
+    const notificationSound = document.getElementById('notification-sound');
+    let activeContactElement = null;
+    let currentContact = null;
+    let pollingInterval = null;
+    let knownAttentionContacts = new Set(); // Guarda os contatos que já sabemos que precisam de atenção
+
+    // Função para tocar o som (com permissão do navegador)
+    function playNotificationSound() {
+        notificationSound.play().catch(error => console.log("O som de notificação foi bloqueado pelo navegador.", error));
+    }
+    
+    // NOVO: Função para atualizar a lista de contatos, verificando por novos alertas
+    async function refreshContactList() {
+        const response = await axios.get(window.location.href);
+        const newHtml = new DOMParser().parseFromString(response.data, 'text/html');
+        const newContactList = newHtml.getElementById('contact-list').innerHTML;
+        const currentContactList = document.getElementById('contact-list');
+        
+        // Verifica se há novos alertas de atenção
+        const newAttentionElements = newHtml.querySelectorAll('.attention-alert');
+        let newAlertFound = false;
+        newAttentionElements.forEach(el => {
+            const contactId = el.id.replace('alert-icon-', '');
+            if (!knownAttentionContacts.has(contactId)) {
+                newAlertFound = true;
+                knownAttentionContacts.add(contactId);
+            }
+        });
+
+        // Toca o som se um novo alerta foi encontrado
+        if (newAlertFound) {
+            playNotificationSound();
+        }
+
+        currentContactList.innerHTML = newContactList;
+        // Re-seleciona a conversa ativa se ela ainda estiver na lista
+        if (currentContact) {
+            const activeEl = document.getElementById(`contact-${currentContact}`);
+            if (activeEl) {
+                activeEl.classList.add('active');
+                activeContactElement = activeEl;
+            }
+        }
+    }
+
+
+    function selecionarConversa(contato, element) {
+        if (pollingInterval) clearInterval(pollingInterval);
+        
+        const badge = document.getElementById(`badge-${contato}`);
+        if (badge) badge.style.display = 'none';
+
+        currentContact = contato;
+        if (activeContactElement) activeContactElement.classList.remove('active');
+        element.classList.add('active');
+        activeContactElement = element;
+        
+        document.getElementById('reply-container').style.display = 'block';
+        carregarConversa(contato, false);
+        pollingInterval = setInterval(() => carregarConversa(contato, true), 5000);
+    }
+    
+    async function carregarConversa(contato, isRefresh) {
+        // ... (esta função continua igual)
+        const chatHistory = document.getElementById('chat-history');
+        if (!isRefresh) chatHistory.innerHTML = '<div class="flex justify-center items-center h-full"><i class="fas fa-spinner fa-spin fa-2x"></i></div>';
+
+        try {
+            const [historyRes, modeRes, statusRes] = await Promise.all([
+                axios.get(`/ver_conversas/api/conversas/${contato}`),
+                axios.get(`/ver_conversas/api/modo_atendimento/${contato}`),
+                axios.get(`/ver_conversas/api/status_atendimento/${contato}`)
+            ]);
+            
+            updateChatHeader(contato, modeRes.data.modo, statusRes.data.status);
+            
+            const historico = historyRes.data;
+            const scrollAtBottom = chatHistory.scrollHeight - chatHistory.clientHeight <= chatHistory.scrollTop + 1;
+            
+            chatHistory.innerHTML = '';
+            historico.forEach(msg => {
+                const dataFormatada = new Date(msg.data_hora).toLocaleString('pt-BR', { timeStyle: 'short', dateStyle: 'short' });
+                if (msg.mensagem_usuario !== '--- RESPOSTA MANUAL DO PAINEL ---') {
+                    chatHistory.innerHTML += `<div class="flex justify-end mb-4"><div class="bg-blue-500 text-white rounded-lg py-2 px-4 max-w-sm"><p>${msg.mensagem_usuario}</p><p class="text-right text-xs text-blue-200 mt-1">${dataFormatada}</p></div></div>`;
+                }
+                if (msg.resposta_bot.startsWith('[ATENDENTE]:')) {
+                    const atendenteMsg = msg.resposta_bot.replace('[ATENDENTE]: ', '');
+                    chatHistory.innerHTML += `<div class="flex justify-end mb-4"><div class="bg-green-500 text-white rounded-lg py-2 px-4 max-w-sm"><p>${atendenteMsg}</p><p class="text-right text-xs text-green-200 mt-1">${dataFormatada}</p></div></div>`;
+                } else if (msg.resposta_bot !== "--- MENSAGEM RECEBIDA EM MODO MANUAL ---") {
+                     chatHistory.innerHTML += `<div class="flex justify-start mb-4"><div class="bg-gray-200 text-gray-800 rounded-lg py-2 px-4 max-w-sm"><p>${msg.resposta_bot}</p><p class="text-right text-xs text-gray-500 mt-1">${dataFormatada}</p></div></div>`;
+                }
+            });
+            if (scrollAtBottom) chatHistory.scrollTop = chatHistory.scrollHeight;
+
+        } catch (error) {
+            if (!isRefresh) chatHistory.innerHTML = '<p class="text-center text-red-500">Erro ao carregar a conversa.</p>';
+        }
+    }
+
+    function updateChatHeader(contato, modo, status) {
+        // ... (esta função continua igual)
+        const chatHeader = document.getElementById('chat-header');
+        const isManual = modo === 'manual';
+        const statuses = ['novo', 'em_atendimento', 'pendente', 'resolvido', 'requer_atencao'];
+        
+        let statusOptions = '';
+        statuses.forEach(s => {
+            statusOptions += `<option value="${s}" ${s === status ? 'selected' : ''}>${s.replace(/_/g, ' ')}</option>`;
+        });
+
+        chatHeader.innerHTML = `<div class="flex items-center gap-4"><h2 class="text-xl font-semibold">${contato}</h2><select id="status-selector" onchange="changeStatus()" class="rounded-md border-gray-300 shadow-sm">${statusOptions}</select></div><button onclick="toggleModoAtendimento()" class="py-2 px-4 rounded-lg text-sm font-semibold text-white ${isManual ? 'bg-red-500 hover:bg-red-600' : 'bg-green-500 hover:bg-green-600'}"><i class="fas ${isManual ? 'fa-robot' : 'fa-user-headset'} mr-2"></i>${isManual ? 'Devolver ao Bot' : 'Assumir'}</button>`;
+    }
+    
+    // ATUALIZADO: Função para alterar o status e remover o alerta visual
+    async function changeStatus() {
+        const newStatus = document.getElementById('status-selector').value;
+        try {
+            await axios.post(`/ver_conversas/api/status_atendimento/${currentContact}`, { status: newStatus });
+            
+            // Remove o ícone de alerta visualmente, se existir
+            const alertIcon = document.getElementById(`alert-icon-${currentContact}`);
+            if (alertIcon) {
+                alertIcon.remove();
+                knownAttentionContacts.delete(currentContact); // Remove da nossa lista de memória
+            }
+        } catch(e) {
+            alert('Erro ao atualizar o status.');
+        }
+    }
+
+    // O resto do JavaScript continua igual
+    async function toggleModoAtendimento() {
+        if (!currentContact) return;
+        const modoRes = await axios.get(`/ver_conversas/api/modo_atendimento/${currentContact}`);
+        const novoModo = modoRes.data.modo === 'bot' ? 'manual' : 'bot';
+        await axios.post(`/ver_conversas/api/modo_atendimento/${currentContact}`, { modo: novoModo });
+        updateChatHeader(currentContact, novoModo);
+    }
+    document.getElementById('reply-form').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        const messageInput = document.getElementById('reply-message');
+        const message = messageInput.value.trim();
+        if (!message || !currentContact) return;
+        try {
+            messageInput.disabled = true;
+            await axios.post('/ver_conversas/api/responder', { contato: currentContact, mensagem: message });
+            messageInput.value = '';
+            await carregarConversa(currentContact, true);
+        } catch (error) {
+            alert('Falha ao enviar mensagem.');
+        } finally {
+            messageInput.disabled = false;
+            messageInput.focus();
+        }
+    });
+
+    // Inicia a verificação da lista de contatos a cada 10 segundos
+    document.addEventListener('DOMContentLoaded', () => {
+        // Inicializa a lista de contatos que já precisam de atenção
+        document.querySelectorAll('.attention-alert').forEach(el => {
+            const contactId = el.id.replace('alert-icon-', '');
+            knownAttentionContacts.add(contactId);
+        });
+        setInterval(refreshContactList, 10000);
+    });
+
+</script>
+</body>
+</html>

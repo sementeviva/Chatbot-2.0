@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <title>Upload de Produtos</title>
+    <style>
+        body {font-family: Arial, sans-serif; background: #f2f2f2; padding: 40px;}
+        .container {max-width: 400px; margin: auto; background: #fff; padding: 28px; border-radius: 10px;}
+        h2 {text-align:center;}
+        .flash-message {margin-bottom: 20px;}
+    </style>
+</head>
+<body>
+<div class="container">
+    <h2>Upload de Produtos</h2>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, msg in messages %}
+          <div class="flash-message alert alert-{{ category }}">{{ msg }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+    <form method="POST" enctype="multipart/form-data">
+        {{ form.csrf_token }}
+        {{ form.file.label }}<br>
+        {{ form.file() }}<br><br>
+        {{ form.submit() }}
+    </form>
+</div>
+</body>
+</html>
